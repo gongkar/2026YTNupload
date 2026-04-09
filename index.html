@@ -426,7 +426,7 @@ async function checkServer() {
   const badge = document.getElementById('serverBadge');
   const label = document.getElementById('serverStatus');
   try {
-    const r = await fetch(`${API_BASE}/health`);
+    const r = await fetch(`${API_BASE}/api/session`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}) });
     if (r.ok) {
       badge.classList.add('online');
       label.textContent = '서버 연결됨';
@@ -556,7 +556,7 @@ async function uploadFile(item) {
   try {
     // 1. 서버에서 세션 URI 획득
     logEntry(`세션 요청: ${file.name}`, 'info');
-    const sessRes = await fetch(`${API_BASE}/api/upload-session`, {
+    const sessRes = await fetch(`${API_BASE}/api/session`, {
       method : 'POST',
       headers: { 'Content-Type': 'application/json' },
       body   : JSON.stringify({ filename: file.name, filesize: file.size, mimeType: file.type || 'application/octet-stream' }),
