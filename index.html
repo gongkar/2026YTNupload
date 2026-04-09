@@ -427,7 +427,8 @@ async function checkServer() {
   const label = document.getElementById('serverStatus');
   try {
     const r = await fetch(`${API_BASE}/api/session`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({}) });
-    if (r.ok) {
+    // 400 = 서버 응답함 (파라미터만 없는 것), 405 = POST만 허용, 둘 다 서버 정상
+    if (r.status === 400 || r.status === 405 || r.status === 200) {
       badge.classList.add('online');
       label.textContent = '서버 연결됨';
     } else throw new Error();
