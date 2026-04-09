@@ -1,0 +1,665 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WEBHARD — Drive Upload</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@300;400;500&family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg        : #07090f;
+    --panel     : #0d1220;
+    --border    : #1a2540;
+    --border-hi : #2e4070;
+    --accent    : #e07820;
+    --accent-dim: rgba(224,120,32,0.15);
+    --accent-glow:rgba(224,120,32,0.35);
+    --ok        : #28c87a;
+    --err       : #e84040;
+    --text      : #b0c0d8;
+    --text-hi   : #dde8f5;
+    --text-dim  : #4a607a;
+    --mono      : 'IBM Plex Mono', monospace;
+    --sans      : 'Noto Sans KR', sans-serif;
+    --chunk     : 10485760; /* 10MB */
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body {
+    height: 100%;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 14px;
+    overflow-x: hidden;
+  }
+
+  /* ── GRID BACKGROUND ─────────────────────────────────────── */
+  body::before {
+    content: '';
+    position: fixed; inset: 0; z-index: 0;
+    background-image:
+      linear-gradient(rgba(30,45,80,0.18) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(30,45,80,0.18) 1px, transparent 1px);
+    background-size: 40px 40px;
+    pointer-events: none;
+  }
+
+  /* ── LAYOUT ──────────────────────────────────────────────── */
+  .wrapper {
+    position: relative; z-index: 1;
+    max-width: 860px;
+    margin: 0 auto;
+    padding: 48px 24px 80px;
+    min-height: 100vh;
+  }
+
+  /* ── HEADER ──────────────────────────────────────────────── */
+  header {
+    display: flex;
+    align-items: baseline;
+    gap: 16px;
+    margin-bottom: 48px;
+  }
+  .logo {
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 500;
+    letter-spacing: 0.12em;
+    color: var(--text-hi);
+    text-transform: uppercase;
+  }
+  .logo span { color: var(--accent); }
+  .subtitle {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .badge {
+    margin-left: auto;
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 4px 10px;
+    border: 1px solid var(--border-hi);
+    color: var(--text-dim);
+    border-radius: 2px;
+    letter-spacing: 0.06em;
+    white-space: nowrap;
+  }
+  .badge .dot {
+    display: inline-block;
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: var(--text-dim);
+    margin-right: 6px;
+    vertical-align: middle;
+    transition: background 0.3s;
+  }
+  .badge.online .dot { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+  .badge.offline .dot { background: var(--err); }
+
+  /* ── DROP ZONE ───────────────────────────────────────────── */
+  #dropzone {
+    position: relative;
+    border: 1.5px dashed var(--border-hi);
+    border-radius: 4px;
+    padding: 64px 40px;
+    text-align: center;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    background: transparent;
+    overflow: hidden;
+  }
+  #dropzone::after {
+    content: '';
+    position: absolute; inset: 0;
+    background: radial-gradient(ellipse at 50% 120%, var(--accent-dim), transparent 70%);
+    opacity: 0;
+    transition: opacity 0.3s;
+    pointer-events: none;
+  }
+  #dropzone:hover, #dropzone.drag-over {
+    border-color: var(--accent);
+    border-style: solid;
+  }
+  #dropzone:hover::after, #dropzone.drag-over::after { opacity: 1; }
+
+  .dz-icon {
+    width: 48px; height: 48px;
+    margin: 0 auto 20px;
+    opacity: 0.4;
+    transition: opacity 0.2s, transform 0.2s;
+  }
+  #dropzone:hover .dz-icon { opacity: 0.9; transform: translateY(-4px); }
+
+  .dz-title {
+    font-size: 16px;
+    font-weight: 500;
+    color: var(--text-hi);
+    margin-bottom: 8px;
+    letter-spacing: 0.02em;
+  }
+  .dz-sub {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+  }
+  .dz-sub em { color: var(--accent); font-style: normal; }
+
+  #fileInput { display: none; }
+
+  /* ── FILE QUEUE ──────────────────────────────────────────── */
+  #queue { margin-top: 24px; display: flex; flex-direction: column; gap: 10px; }
+
+  .file-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 14px 16px;
+    transition: border-color 0.2s;
+    animation: slideIn 0.2s ease;
+  }
+  .file-card.uploading { border-color: var(--border-hi); }
+  .file-card.done      { border-color: rgba(40,200,122,0.4); }
+  .file-card.error     { border-color: rgba(232,64,64,0.4); }
+
+  @keyframes slideIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+
+  .fc-top {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 10px;
+  }
+  .fc-icon {
+    flex-shrink: 0;
+    width: 32px; height: 32px;
+    background: var(--accent-dim);
+    border-radius: 3px;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .fc-icon svg { width: 16px; height: 16px; fill: var(--accent); }
+
+  .fc-info { flex: 1; min-width: 0; }
+  .fc-name {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-hi);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-bottom: 3px;
+  }
+  .fc-meta {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    display: flex; gap: 12px;
+  }
+
+  .fc-status {
+    flex-shrink: 0;
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .fc-status.pending   { color: var(--text-dim); }
+  .fc-status.uploading { color: var(--accent); }
+  .fc-status.done      { color: var(--ok); }
+  .fc-status.error     { color: var(--err); }
+
+  .fc-remove {
+    flex-shrink: 0;
+    background: none; border: none;
+    color: var(--text-dim); cursor: pointer;
+    font-size: 16px; line-height: 1;
+    padding: 2px 4px;
+    transition: color 0.15s;
+  }
+  .fc-remove:hover { color: var(--err); }
+
+  /* Progress bar */
+  .fc-bar-wrap {
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    overflow: hidden;
+    margin-bottom: 6px;
+  }
+  .fc-bar {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.3s ease;
+    box-shadow: 0 0 8px var(--accent-glow);
+  }
+  .file-card.done .fc-bar { background: var(--ok); width: 100% !important; }
+  .file-card.error .fc-bar { background: var(--err); }
+
+  /* Chunk stats */
+  .fc-stats {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    display: flex; justify-content: space-between;
+  }
+  .fc-pct { color: var(--text); font-weight: 500; }
+
+  /* ── CONTROLS ────────────────────────────────────────────── */
+  .controls {
+    margin-top: 24px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .btn-upload {
+    background: var(--accent);
+    color: #0a0a0a;
+    border: none;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    padding: 12px 28px;
+    border-radius: 2px;
+    cursor: pointer;
+    transition: opacity 0.2s, box-shadow 0.2s, transform 0.1s;
+    flex-shrink: 0;
+  }
+  .btn-upload:hover:not(:disabled) {
+    opacity: 0.9;
+    box-shadow: 0 0 20px var(--accent-glow);
+    transform: translateY(-1px);
+  }
+  .btn-upload:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+  .btn-upload:active:not(:disabled) { transform: translateY(0); }
+
+  .btn-clear {
+    background: none;
+    border: 1px solid var(--border-hi);
+    color: var(--text-dim);
+    font-family: var(--mono);
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    padding: 12px 20px;
+    border-radius: 2px;
+    cursor: pointer;
+    transition: border-color 0.2s, color 0.2s;
+  }
+  .btn-clear:hover { border-color: var(--err); color: var(--err); }
+
+  .upload-summary {
+    flex: 1;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    text-align: right;
+  }
+
+  /* ── LOG ─────────────────────────────────────────────────── */
+  #log-wrap {
+    margin-top: 32px;
+    border-top: 1px solid var(--border);
+    padding-top: 20px;
+  }
+  .log-title {
+    font-family: var(--mono);
+    font-size: 10px;
+    letter-spacing: 0.1em;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    margin-bottom: 10px;
+  }
+  #log {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text-dim);
+    max-height: 120px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+  #log .entry { display: flex; gap: 10px; }
+  #log .ts    { color: var(--border-hi); flex-shrink: 0; }
+  #log .msg.ok  { color: var(--ok); }
+  #log .msg.err { color: var(--err); }
+  #log .msg.info{ color: var(--text); }
+
+  /* ── FOOTER ──────────────────────────────────────────────── */
+  footer {
+    margin-top: 48px;
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    letter-spacing: 0.06em;
+    display: flex;
+    justify-content: space-between;
+    border-top: 1px solid var(--border);
+    padding-top: 16px;
+  }
+
+  /* ── SCROLLBAR ───────────────────────────────────────────── */
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: var(--panel); }
+  ::-webkit-scrollbar-thumb { background: var(--border-hi); border-radius: 2px; }
+</style>
+</head>
+<body>
+<div class="wrapper">
+
+  <!-- HEADER -->
+  <header>
+    <div>
+      <div class="logo">WEB<span>HARD</span></div>
+      <div class="subtitle">Google Drive Upload Station</div>
+    </div>
+    <div class="badge" id="serverBadge">
+      <span class="dot"></span>
+      <span id="serverStatus">연결 확인 중…</span>
+    </div>
+  </header>
+
+  <!-- DROP ZONE -->
+  <div id="dropzone">
+    <svg class="dz-icon" viewBox="0 0 48 48" fill="none" xmlns="http://www.w3.org/2000/svg">
+      <path d="M8 36v4h32v-4" stroke="#e07820" stroke-width="2.5" stroke-linecap="round"/>
+      <path d="M24 28V12M24 12L16 20M24 12L32 20" stroke="#e07820" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+    </svg>
+    <div class="dz-title">파일을 드래그하거나 클릭하여 선택</div>
+    <div class="dz-sub">파일 1개 최대 <em>100 GB</em> · 구글 계정 불필요</div>
+    <input type="file" id="fileInput" multiple>
+  </div>
+
+  <!-- FILE QUEUE -->
+  <div id="queue"></div>
+
+  <!-- CONTROLS -->
+  <div class="controls" id="controls" style="display:none">
+    <button class="btn-upload" id="btnUpload">▶ 업로드 시작</button>
+    <button class="btn-clear"  id="btnClear">초기화</button>
+    <div class="upload-summary" id="summary"></div>
+  </div>
+
+  <!-- LOG -->
+  <div id="log-wrap">
+    <div class="log-title">// 업로드 로그</div>
+    <div id="log"></div>
+  </div>
+
+  <footer>
+    <span>CHUNK SIZE: 10 MB · RESUMABLE UPLOAD API</span>
+    <span id="footerFolder">FOLDER: 1WQpphfgBjBpjg…</span>
+  </footer>
+</div>
+
+<script>
+// ── 설정 ─────────────────────────────────────────────────────────────────────
+const API_BASE   = 'https://webhard-api.vercel.app';
+const CHUNK_SIZE = 10 * 1024 * 1024; // 10 MB  (256KB 배수 필수)
+const MAX_RETRY  = 3;
+// ─────────────────────────────────────────────────────────────────────────────
+
+let fileQueue = []; // { file, id, status, card, barEl, statsEl, statusEl }
+let uploading = false;
+
+// ── 서버 상태 확인 ─────────────────────────────────────────────────────────
+async function checkServer() {
+  const badge = document.getElementById('serverBadge');
+  const label = document.getElementById('serverStatus');
+  try {
+    const r = await fetch(`${API_BASE}/health`);
+    if (r.ok) {
+      badge.classList.add('online');
+      label.textContent = '서버 연결됨';
+    } else throw new Error();
+  } catch {
+    badge.classList.add('offline');
+    label.textContent = '서버 오프라인';
+    logEntry('서버에 연결할 수 없습니다. server.js 실행 여부 확인', 'err');
+  }
+}
+checkServer();
+
+// ── 파일 추가 ──────────────────────────────────────────────────────────────
+function addFiles(files) {
+  for (const f of files) {
+    const id = crypto.randomUUID();
+    const card = buildCard(f, id);
+    document.getElementById('queue').appendChild(card);
+    fileQueue.push({ file: f, id, status: 'pending', card,
+      barEl    : card.querySelector('.fc-bar'),
+      statsEl  : card.querySelector('.fc-stats'),
+      statusEl : card.querySelector('.fc-status') });
+    logEntry(`추가: ${f.name} (${fmtSize(f.size)})`, 'info');
+  }
+  updateControls();
+}
+
+// ── 카드 빌드 ──────────────────────────────────────────────────────────────
+function buildCard(file, id) {
+  const card = document.createElement('div');
+  card.className = 'file-card';
+  card.dataset.id = id;
+  card.innerHTML = `
+    <div class="fc-top">
+      <div class="fc-icon">
+        <svg viewBox="0 0 16 16" xmlns="http://www.w3.org/2000/svg">
+          <path d="M3 2h7l3 3v9H3V2zm7 0v3h3"/>
+        </svg>
+      </div>
+      <div class="fc-info">
+        <div class="fc-name">${escHtml(file.name)}</div>
+        <div class="fc-meta">
+          <span>${fmtSize(file.size)}</span>
+          <span>${file.type || 'application/octet-stream'}</span>
+        </div>
+      </div>
+      <div class="fc-status pending">대기</div>
+      <button class="fc-remove" title="제거">×</button>
+    </div>
+    <div class="fc-bar-wrap"><div class="fc-bar"></div></div>
+    <div class="fc-stats">
+      <span class="fc-chunks">— / — 청크</span>
+      <span class="fc-speed"></span>
+      <span class="fc-pct">0%</span>
+    </div>`;
+
+  card.querySelector('.fc-remove').addEventListener('click', () => removeFile(id));
+  return card;
+}
+
+function removeFile(id) {
+  fileQueue = fileQueue.filter(f => {
+    if (f.id === id) { f.card.remove(); return false; }
+    return true;
+  });
+  updateControls();
+}
+
+// ── 드래그 앤 드롭 ──────────────────────────────────────────────────────────
+const dz = document.getElementById('dropzone');
+dz.addEventListener('click', () => document.getElementById('fileInput').click());
+dz.addEventListener('dragover',  e => { e.preventDefault(); dz.classList.add('drag-over'); });
+dz.addEventListener('dragleave', () => dz.classList.remove('drag-over'));
+dz.addEventListener('drop', e => {
+  e.preventDefault();
+  dz.classList.remove('drag-over');
+  addFiles([...e.dataTransfer.files]);
+});
+document.getElementById('fileInput').addEventListener('change', e => {
+  addFiles([...e.target.files]);
+  e.target.value = '';
+});
+
+// ── 컨트롤 업데이트 ────────────────────────────────────────────────────────
+function updateControls() {
+  const ctrl = document.getElementById('controls');
+  const btn  = document.getElementById('btnUpload');
+  const sum  = document.getElementById('summary');
+  if (fileQueue.length === 0) { ctrl.style.display = 'none'; return; }
+  ctrl.style.display = 'flex';
+  const pending = fileQueue.filter(f => f.status === 'pending').length;
+  const total   = fileQueue.reduce((a, f) => a + f.file.size, 0);
+  sum.textContent = `총 ${fileQueue.length}개 파일 · ${fmtSize(total)}`;
+  btn.disabled = uploading || pending === 0;
+}
+
+document.getElementById('btnUpload').addEventListener('click', startUpload);
+document.getElementById('btnClear').addEventListener('click', () => {
+  if (uploading) return;
+  fileQueue.forEach(f => f.card.remove());
+  fileQueue = [];
+  updateControls();
+  document.getElementById('log').innerHTML = '';
+});
+
+// ── 업로드 ─────────────────────────────────────────────────────────────────
+async function startUpload() {
+  uploading = true;
+  document.getElementById('btnUpload').disabled = true;
+
+  const pending = fileQueue.filter(f => f.status === 'pending');
+  for (const item of pending) {
+    await uploadFile(item);
+  }
+
+  uploading = false;
+  updateControls();
+}
+
+async function uploadFile(item) {
+  const { file } = item;
+  item.status = 'uploading';
+  item.card.classList.add('uploading');
+  item.statusEl.className = 'fc-status uploading';
+  item.statusEl.textContent = '업로드 중';
+
+  try {
+    // 1. 서버에서 세션 URI 획득
+    logEntry(`세션 요청: ${file.name}`, 'info');
+    const sessRes = await fetch(`${API_BASE}/api/upload-session`, {
+      method : 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body   : JSON.stringify({ filename: file.name, filesize: file.size, mimeType: file.type || 'application/octet-stream' }),
+    });
+    if (!sessRes.ok) {
+      const e = await sessRes.json().catch(() => ({}));
+      throw new Error(e.error || `세션 생성 실패 (HTTP ${sessRes.status})`);
+    }
+    const { sessionUri } = await sessRes.json();
+    logEntry(`세션 획득 완료 → 업로드 시작`, 'info');
+
+    // 2. 청크 업로드
+    const totalChunks = Math.ceil(file.size / CHUNK_SIZE);
+    let uploadedBytes = 0;
+    let startTime = Date.now();
+
+    for (let chunkIdx = 0; chunkIdx < totalChunks; chunkIdx++) {
+      const start  = chunkIdx * CHUNK_SIZE;
+      const end    = Math.min(start + CHUNK_SIZE, file.size);
+      const chunk  = file.slice(start, end);
+
+      let success = false;
+      for (let attempt = 0; attempt < MAX_RETRY; attempt++) {
+        try {
+          const res = await fetch(sessionUri, {
+            method : 'PUT',
+            headers: {
+              'Content-Range': `bytes ${start}-${end - 1}/${file.size}`,
+              'Content-Type' : file.type || 'application/octet-stream',
+            },
+            body: chunk,
+          });
+
+          // 200/201 = 완료, 308 = 계속
+          if (res.status === 200 || res.status === 201 || res.status === 308) {
+            uploadedBytes = end;
+            success = true;
+            break;
+          } else {
+            throw new Error(`청크 업로드 실패 HTTP ${res.status}`);
+          }
+        } catch (e) {
+          if (attempt < MAX_RETRY - 1) {
+            logEntry(`재시도 ${attempt + 1}/${MAX_RETRY}: ${e.message}`, 'err');
+            await sleep(2000 * (attempt + 1));
+          } else throw e;
+        }
+      }
+      if (!success) throw new Error('최대 재시도 초과');
+
+      // UI 업데이트
+      const pct   = Math.round((uploadedBytes / file.size) * 100);
+      const elapsed = (Date.now() - startTime) / 1000;
+      const speed   = uploadedBytes / elapsed;
+      item.barEl.style.width  = pct + '%';
+      item.statsEl.querySelector('.fc-chunks').textContent =
+        `${chunkIdx + 1} / ${totalChunks} 청크`;
+      item.statsEl.querySelector('.fc-speed').textContent =
+        fmtSize(speed) + '/s';
+      item.statsEl.querySelector('.fc-pct').textContent = pct + '%';
+    }
+
+    // 완료
+    item.status = 'done';
+    item.card.classList.remove('uploading');
+    item.card.classList.add('done');
+    item.statusEl.className = 'fc-status done';
+    item.statusEl.textContent = '완료';
+    item.card.querySelector('.fc-remove').style.display = 'none';
+    logEntry(`✓ 업로드 완료: ${file.name}`, 'ok');
+
+  } catch (err) {
+    item.status = 'error';
+    item.card.classList.remove('uploading');
+    item.card.classList.add('error');
+    item.statusEl.className = 'fc-status error';
+    item.statusEl.textContent = '오류';
+    logEntry(`✗ 실패: ${file.name} — ${err.message}`, 'err');
+  }
+}
+
+// ── 유틸 ───────────────────────────────────────────────────────────────────
+function fmtSize(b) {
+  if (b < 1024)       return b + ' B';
+  if (b < 1048576)    return (b / 1024).toFixed(1) + ' KB';
+  if (b < 1073741824) return (b / 1048576).toFixed(1) + ' MB';
+  return (b / 1073741824).toFixed(2) + ' GB';
+}
+function escHtml(s) {
+  return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function logEntry(msg, type = 'info') {
+  const log = document.getElementById('log');
+  const now = new Date().toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit', second:'2-digit'});
+  const el  = document.createElement('div');
+  el.className = 'entry';
+  el.innerHTML = `<span class="ts">${now}</span><span class="msg ${type}">${escHtml(msg)}</span>`;
+  log.appendChild(el);
+  log.scrollTop = log.scrollHeight;
+  if (log.children.length > 80) log.removeChild(log.firstChild);
+}
+</script>
+</body>
+</html>
